@@ -305,7 +305,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
             if i % 100 == 0:
                 with torch.no_grad():
                     g_ema.eval()
-                    sample, _ = g_ema([sample_z])
+                    sample, _ = g_ema([sample_z], g_ema)
                     utils.save_image(
                         sample,
                         f"sample/{str(i).zfill(6)}.png",
@@ -349,7 +349,7 @@ if __name__ == "__main__":
         help="number of the samples generated during training",
     )
     parser.add_argument(
-        "--size", type=int, default=256, help="image sizes for the model"
+        "--size", type=int, default=4, help="image sizes for the model"
     )
     parser.add_argument(
         "--r1", type=float, default=10, help="weight of the r1 regularization"
@@ -449,14 +449,22 @@ if __name__ == "__main__":
     elif args.arch == 'swagan':
         from swagan import Generator, Discriminator
 
+    # FIXME acquire base mesh, fix option acquire
+    from process_data.mesh_handler import MeshHandler
+    from process_data import options
+    # (self, path_or_mesh: Union[str, T_Mesh], opt: Options, level: int, local_axes: Union[N, TS] = None)
+    opt_ = options.Options()
+    opt_.parse_cmdline()
+    template_mesh = MeshHandler(path_or_mesh="data/face.obj", opt=opt_, level=0)
+
     generator = Generator(
-        args.size, args.latent, args.n_mlp, channel_multiplier=args.channel_multiplier
+        args.size, args.latent, args.n_mlp, template_mesh, channel_multiplier=args.channel_multiplier
     ).to(device)
     discriminator = Discriminator(
         args.size, channel_multiplier=args.channel_multiplier
     ).to(device)
     g_ema = Generator(
-        args.size, args.latent, args.n_mlp, channel_multiplier=args.channel_multiplier
+        args.size, args.latent, args.n_mlp, template_mesh, channel_multiplier=args.channel_multiplier
     ).to(device)
     g_ema.eval()
     accumulate(g_ema, generator, 0)

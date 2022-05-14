@@ -308,12 +308,12 @@ class NoiseInjection(nn.Module):
 
         self.weight = nn.Parameter(torch.zeros(1))
 
-    def forward(self, image, noise=None):
+    def forward(self, mesh_feat, noise=None):
         if noise is None:
-            batch, _, height, width = image.shape
-            noise = image.new_empty(batch, 1, height, width).normal_()
+            batch, _, n_faces = mesh_feat.shape
+            noise = mesh_feat.new_empty(batch, 1, n_faces).normal_()
 
-        return image + self.weight * noise
+        return mesh_feat + self.weight * noise
 
 
 class ConstantInput(nn.Module):
@@ -324,7 +324,7 @@ class ConstantInput(nn.Module):
 
     def forward(self, input):
         batch = input.shape[0]
-        out = self.input.repeat(batch, 1, 1, 1)
+        out = self.input.repeat(batch, 1, 1)
 
         return out
 
@@ -339,6 +339,7 @@ class StyledConv(nn.Module):
         upsample=False,
         blur_kernel=[1, 3, 3, 1],
         demodulate=True,
+        is_first=False,
     ):
         super().__init__()
 
@@ -356,9 +357,34 @@ class StyledConv(nn.Module):
         # self.bias = nn.Parameter(torch.zeros(1, out_channel, 1, 1))
         # self.activate = ScaledLeakyReLU(0.2)
         self.activate = FusedLeakyReLU(out_channel)
+        self.is_first = is_first
 
-    def forward(self, input, style, noise=None):
+    def forward(self, input, style, mesh_topology, noise=None):
+        # input [1, 4 features, faces]
+        # mesh_topology [3, faces]
+
+        n_faces = input.shape[-1]
+        if self.is_first == False:
+            # x_a [1, 4 features, 3 neighbor faces, faces]
+            input_a = input[:, :, mesh_topology]
+            # x_b [1, 4 features, 3 neighbor faces, faces] self feature dup 3 times
+            input_b = input.view(1, -1, 1, n_faces).expand_as(input_a)
+            # x [1, 8 features, 3 neighbor faces, faces]
+            input = torch.cat((input_a, input_b), 1)
+        else:
+            # create initial 4 feature's embedding
+            input = input.view(1, 3, -1, n_faces).permute(0, 2, 1, 3)
+        # reshape so that it meet the Modulated2DVonv
+        input = input.reshape(1, -1, n_faces * 3, 1)
+
+
         out = self.conv(input, style)
+        
+        out = out.view(1, -1, 3, n_faces)
+        # Prevent from face order
+        # x [1, 8 or 4 features, faces]
+        out = out.max(2)[0]
+
         out = self.noise(out, noise=noise)
         # out = out + self.bias
         out = self.activate(out)
@@ -366,7 +392,7 @@ class StyledConv(nn.Module):
         return out
 
 
-class ToRGB(nn.Module):
+class ToDisplacement(nn.Module):
     def __init__(self, in_channel, style_dim, upsample=True, blur_kernel=[1, 3, 3, 1]):
         super().__init__()
 
@@ -374,10 +400,26 @@ class ToRGB(nn.Module):
             self.upsample = Upsample(blur_kernel)
 
         self.conv = ModulatedConv2d(in_channel, 3, 1, style_dim, demodulate=False)
-        self.bias = nn.Parameter(torch.zeros(1, 3, 1, 1))
+        self.bias = nn.Parameter(torch.zeros(1, 3, 1))
 
-    def forward(self, input, style, skip=None):
+    def forward(self, input, style, mesh_topology, skip=None):
+        n_faces = input.shape[-1]
+
+        # x_a [1, 4 features, 3 neighbor faces, faces]
+        input_a = input[:, :, mesh_topology]
+        # x_b [1, 4 features, 3 neighbor faces, faces] self feature dup 3 times
+        input_b = input.view(1, -1, 1, n_faces).expand_as(input_a)
+        # x [1, 8 features, 3 neighbor faces, faces]
+        input = torch.cat((input_a, input_b), 1)
+
         out = self.conv(input, style)
+
+        out = out.reshape(1, -1, n_faces * 3, 1)
+        # Prevent from face order
+        # x [1, 3 features(displacement xyz), faces]
+        out = out.max(2)[0]
+
+
         out = out + self.bias
 
         if skip is not None:
@@ -394,6 +436,7 @@ class Generator(nn.Module):
         size,
         style_dim,
         n_mlp,
+        template_mesh, 
         channel_multiplier=2,
         blur_kernel=[1, 3, 3, 1],
         lr_mlp=0.01,
@@ -413,6 +456,8 @@ class Generator(nn.Module):
                 )
             )
 
+        self.template_mesh = template_mesh
+
         self.style = nn.Sequential(*layers)
 
         self.channels = {
@@ -428,17 +473,21 @@ class Generator(nn.Module):
         }
 
         self.input = ConstantInput(self.channels[4])
+        # FIXME StyleConv and ToDisplacement should take mesh into account, in principle, all operation using convolution should take that into account
+        # downgrade 2d conv to perform 1d operation(? xD
+        # if acceptable, don't use their extension
+        # TODO Currently, I'll resize the 1d feature to 2d by unsqueeze, and the kernel size is 1
         self.conv1 = StyledConv(
-            self.channels[4], self.channels[4], 3, style_dim, blur_kernel=blur_kernel
+            self.channels[4], self.channels[4], 1, style_dim, blur_kernel=blur_kernel, is_first=True
         )
-        self.to_rgb1 = ToRGB(self.channels[4], style_dim, upsample=False)
+        self.to_displacement1 = ToDisplacement(self.channels[4], style_dim, upsample=False)
 
         self.log_size = int(math.log(size, 2))
         self.num_layers = (self.log_size - 2) * 2 + 1
 
         self.convs = nn.ModuleList()
         self.upsamples = nn.ModuleList()
-        self.to_rgbs = nn.ModuleList()
+        self.to_displacements = nn.ModuleList()
         self.noises = nn.Module()
 
         in_channel = self.channels[4]
@@ -464,11 +513,11 @@ class Generator(nn.Module):
 
             self.convs.append(
                 StyledConv(
-                    out_channel, out_channel, 3, style_dim, blur_kernel=blur_kernel
+                    out_channel, out_channel, 1, style_dim, blur_kernel=blur_kernel
                 )
             )
 
-            self.to_rgbs.append(ToRGB(out_channel, style_dim))
+            self.to_displacements.append(ToDisplacement(out_channel, style_dim))
 
             in_channel = out_channel
 
@@ -496,6 +545,7 @@ class Generator(nn.Module):
     def get_latent(self, input):
         return self.style(input)
 
+    # Add mesh forward
     def forward(
         self,
         styles,
@@ -546,18 +596,27 @@ class Generator(nn.Module):
 
             latent = torch.cat([latent, latent2], 1)
 
-        out = self.input(latent)
-        out = self.conv1(out, latent[:, 0], noise=noise[0])
-
-        skip = self.to_rgb1(out, latent[:, 1])
+        # TODO augment underlying operation to batch operation
+        # FIXME get nth level mesh
+        current_level_mesh = self.template_mesh.get_mesh_at_level()
+        # FIXME extract initial level mesh's feature
+        out_mesh_feat = current_level_mesh.get_feature()
+        # FIXME should normalize feature first
+        # constant input should be replaced with initial mesh's feature duplication
+        batch = latent.shape[0]
+        out_mesh_feat = out_mesh_feat.repeat(batch, 1, 1)
+        # out_mesh_feat = self.input(latent, out_mesh_feat)
+        out_mesh_feat = self.conv1(out_mesh_feat, latent[:, 0], current_level_mesh, noise=noise[0])
+        skip = self.to_displacement1(out, latent[:, 1], current_level_mesh)
 
         i = 1
-        for conv1, conv2, noise1, noise2, to_rgb in zip(
-            self.convs[::2], self.convs[1::2], noise[1::2], noise[2::2], self.to_rgbs
+        for conv1, conv2, noise1, noise2, to_displacemnet in zip(
+            self.convs[::2], self.convs[1::2], noise[1::2], noise[2::2], self.to_displacements
         ):
+            # FIXME substitude their mesh_topology into upsampled current_level_mesh
             out = conv1(out, latent[:, i], noise=noise1)
             out = conv2(out, latent[:, i + 1], noise=noise2)
-            skip = to_rgb(out, latent[:, i + 2], skip)
+            skip = to_displacemnet(out, latent[:, i + 2], skip=skip)
 
             i += 2
 
