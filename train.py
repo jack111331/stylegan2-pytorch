@@ -467,6 +467,7 @@ if __name__ == "__main__":
         args.size, args.latent, args.n_mlp, template_mesh, channel_multiplier=args.channel_multiplier
     ).to(device)
     g_ema.eval()
+    # copy generator to g_ema
     accumulate(g_ema, generator, 0)
 
     g_reg_ratio = args.g_reg_every / (args.g_reg_every + 1)
