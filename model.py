@@ -523,6 +523,57 @@ class Generator(nn.Module):
 
         self.n_latent = self.log_size * 2 - 2
 
+        # FIXME device for get_renderer
+        self.focal = 1015
+        self.img_size = 256
+        self.renderer = self.get_renderer()
+
+    def get_renderer(self):
+        from pytorch3d.renderer import (
+            look_at_view_transform,
+            FoVPerspectiveCameras,
+            PointLights,
+            RasterizationSettings,
+            MeshRenderer,
+            MeshRasterizer,
+            SoftPhongShader,
+            blending,
+        )
+        import numpy as np
+
+        R, T = look_at_view_transform(10, 0, 0)
+        cameras = FoVPerspectiveCameras(R=R, T=T, znear=0.01, zfar=50,
+                                        fov=2 * np.arctan(self.img_size // 2 / self.focal) * 180. / np.pi)
+
+        lights = PointLights(location=[[0.0, 0.0, 1e5]], ambient_color=[[1, 1, 1]],
+                             specular_color=[[0., 0., 0.]], diffuse_color=[[0., 0., 0.]])
+
+        raster_settings = RasterizationSettings(
+            image_size=self.img_size,
+            blur_radius=0.0,
+            faces_per_pixel=1,
+        )
+        blend_params = blending.BlendParams(background_color=[0, 0, 0])
+
+        renderer = MeshRenderer(
+            rasterizer=MeshRasterizer(
+                cameras=cameras,
+                raster_settings=raster_settings
+            ),
+            # shader = SoftSilhouetteShader(
+            #     device=device,
+            #     cameras=cameras,
+            #     lights=lights,
+            #     blend_params=blend_params
+            # )
+            shader=SoftPhongShader(
+                cameras=cameras,
+                lights=lights,
+                blend_params=blend_params
+            )
+        )
+        return renderer
+
     def make_noise(self):
         device = self.input.input.device
 
@@ -597,18 +648,21 @@ class Generator(nn.Module):
             latent = torch.cat([latent, latent2], 1)
 
         # TODO augment underlying operation to batch operation
-        # FIXME get nth level mesh
-        current_level_mesh = self.template_mesh.get_mesh_at_level()
-        # FIXME extract initial level mesh's feature
-        out_mesh_feat = current_level_mesh.get_feature()
-        # FIXME should normalize feature first
+        # FIXME extract initial level mesh's feature(argument)
+        out_mesh_feat = self.template_mesh.extract_features(0.0, False)
+        out_mesh_topology = self.template_mesh.gfmm
+        # FIXME should normalize feature first, for modularize, demodularize
         # constant input should be replaced with initial mesh's feature duplication
         batch = latent.shape[0]
         out_mesh_feat = out_mesh_feat.repeat(batch, 1, 1)
         # out_mesh_feat = self.input(latent, out_mesh_feat)
-        out_mesh_feat = self.conv1(out_mesh_feat, latent[:, 0], current_level_mesh, noise=noise[0])
-        skip = self.to_displacement1(out, latent[:, 1], current_level_mesh)
+        out_mesh_feat = self.conv1(out_mesh_feat, latent[:, 0], out_mesh_topology, noise=noise[0])
+        skip = self.to_displacement1(out, latent[:, 1], out_mesh_topology)
 
+        # add displacement onto original mesh
+        self.template_mesh += skip
+
+        # Current assume it won't enter here
         i = 1
         for conv1, conv2, noise1, noise2, to_displacemnet in zip(
             self.convs[::2], self.convs[1::2], noise[1::2], noise[2::2], self.to_displacements
@@ -620,13 +674,22 @@ class Generator(nn.Module):
 
             i += 2
 
-        image = skip
+        # Differential rendering to make image
+        # FIXME both are returned from template_mesh's raw mesh
+        vertices, faces = self.template_mesh.vs, self.template_mesh.faces 
+
+        from pytorch3d.structures import Meshes
+        # FIXME checkout verts' dimension and faces dimension, texture argument should be satisfied for synthesize face texture
+        mesh = Meshes(verts=vertices.unsqueeze(0), faces=faces.unsqueeze(0))  # Meshes(Vertex, Faces, Texture)
+        rendered_image = self.renderer(mesh)
+
+        # image = skip
 
         if return_latents:
-            return image, latent
+            return rendered_image, latent
 
         else:
-            return image, None
+            return rendered_image, None
 
 
 class ConvLayer(nn.Sequential):

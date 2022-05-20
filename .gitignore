@@ -133,3 +133,4 @@ wandb/
 *.pkl
 
 stylegan2-ffhq-config-f.pt
+lmdb*
