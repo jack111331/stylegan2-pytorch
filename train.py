@@ -123,7 +123,7 @@ def set_grad_none(model, targets):
             p.grad = None
 
 
-def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, device):
+def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, device, opt_):
     loader = sample_data(loader)
 
     pbar = range(args.iter)
@@ -242,15 +242,18 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         loss_dict["g"] = g_loss
 
+        generator.template_mesh = MeshHandler(path_or_mesh="data/sphere.obj", opt=opt_, level=0).to('cuda')
         generator.zero_grad()
         g_loss.backward()
         g_optim.step()
 
+        # FIXME Autograd template_mesh
         g_regularize = i % args.g_reg_every == 0
 
         if g_regularize:
             path_batch_size = max(1, args.batch // args.path_batch_shrink)
             noise = mixing_noise(path_batch_size, args.latent, args.mixing, device)
+            generator.template_mesh = MeshHandler(path_or_mesh="data/sphere.obj", opt=opt_, level=0).to('cuda')
             fake_img, latents = generator(noise, return_latents=True)
 
             path_loss, mean_path_length, path_lengths = g_path_regularize(
@@ -311,17 +314,17 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                     }
                 )
 
-            if i % 100 == 0:
-                with torch.no_grad():
-                    g_ema.eval()
-                    sample, _ = g_ema([sample_z], g_ema)
-                    utils.save_image(
-                        sample,
-                        f"sample/{str(i).zfill(6)}.png",
-                        nrow=int(args.n_sample ** 0.5),
-                        normalize=True,
-                        range=(-1, 1),
-                    )
+            # if i % 100 == 0:
+            #     with torch.no_grad():
+            #         g_ema.eval()
+            #         sample, _ = g_ema([sample_z], g_ema)
+            #         utils.save_image(
+            #             sample,
+            #             f"sample/{str(i).zfill(6)}.png",
+            #             nrow=int(args.n_sample ** 0.5),
+            #             normalize=True,
+            #             range=(-1, 1),
+            #         )
 
             if i % 10000 == 0:
                 torch.save(
@@ -548,4 +551,4 @@ if __name__ == "__main__":
     if get_rank() == 0 and wandb is not None and args.wandb:
         wandb.init(project="stylegan 2")
 
-    train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, device)
+    train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, device, opt_)

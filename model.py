@@ -349,17 +349,17 @@ class NormalPerFaceConv(nn.Module):
 
     def forward(self, input):
         # input [1, 12 features(3 neighbor faces * (4: opposite_vs_local_coord 3 and edge length 1)), faces]
-
+        batch = input.shape[0]
         n_faces = input.shape[-1]
 
         # create initial 4 feature's embedding
-        input = input.view(1, 3, -1, n_faces).permute(0, 2, 1, 3)
+        input = input.view(batch, 3, -1, n_faces).permute(0, 2, 1, 3)
 
-        input = input.reshape(1, -1, n_faces * 3)
+        input = input.reshape(batch, -1, n_faces * 3)
 
         out = self.conv(input)
         
-        out = out.view(1, -1, 3, n_faces)
+        out = out.view(batch, -1, 3, n_faces)
         # Prevent from face order
         # x [1, 8 or 4 features, faces]
         out = out.max(2)[0]
@@ -400,20 +400,21 @@ class StyledConv(nn.Module):
     def forward(self, input, style, mesh_topology, noise=None):
         # input [1, style_dim features, faces]
         # mesh_topology [3, faces]
+        batch = input.shape[0]
 
         n_faces = input.shape[-1]
         # x_a [1, 4 features, 3 neighbor faces, faces]
         input_a = input[:, :, mesh_topology]
         # x_b [1, 4 features, 3 neighbor faces, faces] self feature dup 3 times
-        input_b = input.view(1, -1, 1, n_faces).expand_as(input_a)
+        input_b = input.view(batch, -1, 1, n_faces).expand_as(input_a)
         # x [1, 8 features, 3 neighbor faces, faces]
         input = torch.cat((input_a, input_b), 1)
         # reshape so that it meet the Modulated2DVonv
-        input = input.reshape(1, -1, n_faces * 3, 1)
+        input = input.reshape(batch, -1, n_faces * 3, 1)
 
         out = self.conv(input, style)
         
-        out = out.view(1, -1, 3, n_faces)
+        out = out.view(batch, -1, 3, n_faces)
         # Prevent from face order
         # x [1, 8 or 4 features, faces]
         out = out.max(2)[0]
@@ -437,19 +438,20 @@ class ToDisplacement(nn.Module):
 
     def forward(self, input, style, mesh_topology, skip=None):
         n_faces = input.shape[-1]
+        batch = input.shape[0]
 
         # x_a [1, 4 features, 3 neighbor faces, faces]
         input_a = input[:, :, mesh_topology]
         # x_b [1, 4 features, 3 neighbor faces, faces] self feature dup 3 times
-        input_b = input.view(1, -1, 1, n_faces).expand_as(input_a)
+        input_b = input.view(batch, -1, 1, n_faces).expand_as(input_a)
         # x [1, 8 features, 3 neighbor faces, faces]
         input = torch.cat((input_a, input_b), 1)
         # reshape so that it meet the Modulated2DVonv
-        input = input.reshape(1, -1, n_faces * 3, 1)
+        input = input.reshape(batch, -1, n_faces * 3, 1)
 
         out = self.conv(input, style)
 
-        out = out.view(1, -1, 3, n_faces)
+        out = out.view(batch, -1, 3, n_faces)
         # Prevent from face order
         # x [1, 3 features(displacement xyz), faces]
         out = out.max(2)[0]
