@@ -1,9 +1,9 @@
-from custom_types import *
+from process_data.custom_types import *
 import numpy as np
 from process_data.files_utils import init_folders, add_suffix
 import os
 import pickle
-import constants as const
+import process_data.constants as const
 
 
 class Upsampler:

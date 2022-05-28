@@ -182,6 +182,11 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         else:
             real_img_aug = real_img
 
+        mask_img = fake_img[:, 3, ...]
+        fake_img_color = fake_img[:, :3, ...]
+        fake_img = mask_img * fake_img_color
+
+
         fake_pred = discriminator(fake_img)
         real_pred = discriminator(real_img_aug)
         d_loss = d_logistic_loss(real_pred, fake_pred)
@@ -228,7 +233,11 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         if args.augment:
             fake_img, _ = augment(fake_img, ada_aug_p)
 
+        mask_img = fake_img[:, 3, ...]
+        fake_img_color = fake_img[:, :3, ...]
+        fake_img = mask_img * fake_img_color
         fake_pred = discriminator(fake_img)
+
         g_loss = g_nonsaturating_loss(fake_pred)
 
         loss_dict["g"] = g_loss
@@ -360,10 +369,11 @@ if __name__ == "__main__":
         default=2,
         help="weight of the path length regularization",
     )
+    # FIXME currently batch is 1, so no need to shrink, default is 2
     parser.add_argument(
         "--path_batch_shrink",
         type=int,
-        default=2,
+        default=1,
         help="batch size reducing factor for the path length regularization (reduce memory consumption)",
     )
     parser.add_argument(
@@ -454,14 +464,15 @@ if __name__ == "__main__":
     from process_data import options
     # (self, path_or_mesh: Union[str, T_Mesh], opt: Options, level: int, local_axes: Union[N, TS] = None)
     opt_ = options.Options()
-    opt_.parse_cmdline()
-    template_mesh = MeshHandler(path_or_mesh="data/face.obj", opt=opt_, level=0)
+    opt_.parse_cmdline(parser)
+    template_mesh = MeshHandler(path_or_mesh="data/sphere.obj", opt=opt_, level=0).to('cuda')
 
     generator = Generator(
         args.size, args.latent, args.n_mlp, template_mesh, channel_multiplier=args.channel_multiplier
     ).to(device)
+    # FIXME Temporary use 128 output image size, after done experimenting GCNN, should change back to args.size
     discriminator = Discriminator(
-        args.size, channel_multiplier=args.channel_multiplier
+        128, channel_multiplier=args.channel_multiplier
     ).to(device)
     g_ema = Generator(
         args.size, args.latent, args.n_mlp, template_mesh, channel_multiplier=args.channel_multiplier
@@ -525,8 +536,8 @@ if __name__ == "__main__":
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5), inplace=True),
         ]
     )
-
-    dataset = MultiResolutionDataset(args.path, transform, args.size)
+    # FIXME temparary use 128 size, should change back to args.size
+    dataset = MultiResolutionDataset(args.path, transform, 128)
     loader = data.DataLoader(
         dataset,
         batch_size=args.batch,

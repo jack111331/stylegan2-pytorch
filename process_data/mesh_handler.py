@@ -1,9 +1,10 @@
-from custom_types import *
-from constants import CACHE_ROOT, DATA_ROOT
+from threading import local
+from process_data.custom_types import *
+from process_data.constants import CACHE_ROOT, DATA_ROOT
 from process_data import mesh_utils
 import torch
 import os
-from options import Options
+from process_data.options import Options
 from process_data import files_utils
 
 
@@ -77,6 +78,7 @@ class MeshHandler:
     def projet_displacemnets(self, deltas: T) -> T:
         _, local_axes = self.extract_local_axes()
         # deltas [face size, xyz]
+        local_axes = local_axes
         deltas = deltas.squeeze(0).t().reshape(-1, 3)
         # linear projection according to local axis, this is displacement vector
         # global_vecs [face * 3 vertex(each face vertex), 3 xyz]??
