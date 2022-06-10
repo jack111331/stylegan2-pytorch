@@ -70,6 +70,7 @@ def d_logistic_loss(real_pred, fake_pred):
 
 def d_r1_loss(real_pred, real_img):
     with conv2d_gradfix.no_weight_gradients():
+        # autograd can be viewed as a DAG??
         grad_real, = autograd.grad(
             outputs=real_pred.sum(), inputs=real_img, create_graph=True
         )
@@ -174,6 +175,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
         fake_img, _ = generator(noise)
+        fake_img = fake_img.permute(0, 3, 1, 2)
 
         if args.augment:
             real_img_aug, _ = augment(real_img, ada_aug_p)
@@ -184,7 +186,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         mask_img = fake_img[:, 3, ...]
         fake_img_color = fake_img[:, :3, ...]
-        fake_img = mask_img * fake_img_color
+        fake_img = mask_img[:, None, ...] * fake_img_color
 
 
         fake_pred = discriminator(fake_img)
@@ -229,20 +231,20 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
         fake_img, _ = generator(noise)
+        fake_img = fake_img.permute(0, 3, 1, 2)
 
         if args.augment:
             fake_img, _ = augment(fake_img, ada_aug_p)
 
         mask_img = fake_img[:, 3, ...]
         fake_img_color = fake_img[:, :3, ...]
-        fake_img = mask_img * fake_img_color
+        fake_img = mask_img[:, None, ...] * fake_img_color
         fake_pred = discriminator(fake_img)
 
         g_loss = g_nonsaturating_loss(fake_pred)
 
         loss_dict["g"] = g_loss
 
-        generator.template_mesh = MeshHandler(path_or_mesh="data/sphere.obj", opt=opt_, level=0).to('cuda')
         generator.zero_grad()
         g_loss.backward()
         g_optim.step()
@@ -250,29 +252,28 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         # FIXME Autograd template_mesh
         g_regularize = i % args.g_reg_every == 0
 
-        if g_regularize:
-            path_batch_size = max(1, args.batch // args.path_batch_shrink)
-            noise = mixing_noise(path_batch_size, args.latent, args.mixing, device)
-            generator.template_mesh = MeshHandler(path_or_mesh="data/sphere.obj", opt=opt_, level=0).to('cuda')
-            fake_img, latents = generator(noise, return_latents=True)
+        # if g_regularize:
+        #     path_batch_size = max(1, args.batch // args.path_batch_shrink)
+        #     noise = mixing_noise(path_batch_size, args.latent, args.mixing, device)
+        #     fake_img, latents = generator(noise, return_latents=True)
+        #     fake_img = fake_img.permute(0, 3, 1, 2)
+        #     path_loss, mean_path_length, path_lengths = g_path_regularize(
+        #         fake_img, latents, mean_path_length
+        #     )
 
-            path_loss, mean_path_length, path_lengths = g_path_regularize(
-                fake_img, latents, mean_path_length
-            )
+        #     generator.zero_grad()
+        #     weighted_path_loss = args.path_regularize * args.g_reg_every * path_loss
 
-            generator.zero_grad()
-            weighted_path_loss = args.path_regularize * args.g_reg_every * path_loss
+        #     if args.path_batch_shrink:
+        #         weighted_path_loss += 0 * fake_img[0, 0, 0, 0]
 
-            if args.path_batch_shrink:
-                weighted_path_loss += 0 * fake_img[0, 0, 0, 0]
+        #     weighted_path_loss.backward()
 
-            weighted_path_loss.backward()
+        #     g_optim.step()
 
-            g_optim.step()
-
-            mean_path_length_avg = (
-                reduce_sum(mean_path_length).item() / get_world_size()
-            )
+        #     mean_path_length_avg = (
+        #         reduce_sum(mean_path_length).item() / get_world_size()
+        #     )
 
         loss_dict["path"] = path_loss
         loss_dict["path_length"] = path_lengths.mean()
@@ -468,7 +469,7 @@ if __name__ == "__main__":
     # (self, path_or_mesh: Union[str, T_Mesh], opt: Options, level: int, local_axes: Union[N, TS] = None)
     opt_ = options.Options()
     opt_.parse_cmdline(parser)
-    template_mesh = MeshHandler(path_or_mesh="data/sphere.obj", opt=opt_, level=0).to('cuda')
+    template_mesh = MeshHandler(path_or_mesh="data/sphere.obj", opt=opt_)
 
     generator = Generator(
         args.size, args.latent, args.n_mlp, template_mesh, channel_multiplier=args.channel_multiplier

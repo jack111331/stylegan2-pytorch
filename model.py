@@ -689,54 +689,61 @@ class Generator(nn.Module):
 
             latent = torch.cat([latent, latent2], 1)
 
-        # TODO augment underlying operation to batch operation
         # FIXME extract initial level mesh's feature(argument)
-        out_mesh_feat = self.template_mesh.extract_features(0.0, False).to('cuda')
-        out_mesh_topology = self.template_mesh.gfmm.to('cuda')
+        batch = latent.shape[0]
+        # refresh 
+        self.temp_template_mesh = self.template_mesh.copy(batch).to('cuda')
+        out_mesh_feat = self.temp_template_mesh.extract_features(0.0, False).to('cuda')
+        out_mesh_topology = self.temp_template_mesh.gfmm.to('cuda')
+        # gfmm(3, 960)
+        # 
         # FIXME should normalize feature first, for modularize, demodularize
         # constant input should be replaced with initial mesh's feature duplication
-        batch = latent.shape[0]
-        out_mesh_feat = out_mesh_feat.repeat(batch, 1, 1)
+        # out_mesh_feat = out_mesh_feat.repeat(batch, 1, 1)
         # out_mesh_feat = self.input(latent, out_mesh_feat)
         out_mesh_feat = self.conv0(out_mesh_feat)
         out_mesh_feat = self.conv1(out_mesh_feat, latent[:, 0], out_mesh_topology, noise=noise[0])
         skip = self.to_displacement1(out_mesh_feat, latent[:, 1], out_mesh_topology)
-
+        # skip no problem
+        # (1, 3, 960)
         # add displacement onto original mesh
-        self.template_mesh += skip
+        self.temp_template_mesh = self.temp_template_mesh + skip
 
         # Current assume it won't enter here
-        i = 1
-        for conv1, conv2, noise1, noise2, to_displacemnet in zip(
-            self.convs[::2], self.convs[1::2], noise[1::2], noise[2::2], self.to_displacements
-        ):
-            # FIXME substitude their mesh_topology into upsampled current_level_mesh
-            out = conv1(out, latent[:, i], noise=noise1)
-            out = conv2(out, latent[:, i + 1], noise=noise2)
-            skip = to_displacemnet(out, latent[:, i + 2], skip=skip)
+        # i = 1
+        # for conv1, conv2, noise1, noise2, to_displacemnet in zip(
+        #     self.convs[::2], self.convs[1::2], noise[1::2], noise[2::2], self.to_displacements
+        # ):
+        #     # FIXME substitude their mesh_topology into upsampled current_level_mesh
+        #     out = conv1(out, latent[:, i], noise=noise1)
+        #     out = conv2(out, latent[:, i + 1], noise=noise2)
+        #     skip = to_displacemnet(out, latent[:, i + 2], skip=skip)
 
-            i += 2
+        #     i += 2
 
         # Differential rendering to make image
         # FIXME both are returned from template_mesh's raw mesh
-        vertices, faces = self.template_mesh.vs, self.template_mesh.faces 
+        vertices, faces = self.temp_template_mesh.vs, self.temp_template_mesh.faces 
 
+        # FIXME checkout https://github.com/marcoamonteiro/pi-GAN/blob/896b8994f415b7efc73f97868a9c99f59ac51adb/generators/volumetric_rendering.py#L91
+        # for camera sample distribution
         from pytorch3d.structures import Meshes
         from pytorch3d.renderer import TexturesVertex
         # FIXME checkout verts' dimension and faces dimension, texture argument should be satisfied for synthesize face texture
-        verts_rgb = torch.ones_like(vertices)[None] # (1, V, 3)
-        textures = TexturesVertex(verts_features=verts_rgb.to('cuda'))
-        mesh = Meshes(verts=vertices.unsqueeze(0), faces=faces.unsqueeze(0), textures=textures)  # Meshes(Vertex, Faces, Texture)
+        verts_rgb = torch.ones_like(vertices, requires_grad=True).to('cuda') # (batch, V, 3)
+        textures = TexturesVertex(verts_features=verts_rgb)
+        mesh_output = Meshes(verts=vertices, faces=faces.repeat(batch, 1, 1), textures=textures)  # Meshes(Vertex, Faces, Texture)
         # self.renderer(mesh) (batch, height, width, channels[rgba]), need to convert to (batch, channels, height, width) for later discriminator conv
-        rendered_image = self.renderer(mesh).permute(0, 3, 1, 2)
-
+        rendered_image = self.renderer(mesh_output)
         # image = skip
+        # (1, 4, 128, 128)
 
         if return_latents:
+            # return temp_template_mesh.vs.repeat(1, 4, 1, 128)[:1, :4, :128, :128], latent
             return rendered_image, latent
-
         else:
             return rendered_image, None
+            # return temp_template_mesh.vs.repeat(1, 4, 1, 128)[:1, :4, :128, :128], None
 
 
 class ConvLayer(nn.Sequential):

@@ -160,7 +160,7 @@ class MeshDS: # : mesh data structures
         edge2key_cache = torch.zeros(int(faces.shape[0] * 3), dtype=torch.int64)
         edges_count = 0
         edge2faces = torch.zeros(int(faces.shape[0] * 1.5), 2, dtype=torch.int64)
-        nb_count = torch.zeros(self.gfmm .shape[1], dtype=torch.int64)
+        nb_count = torch.zeros(self.gfmm.shape[1], dtype=torch.int64)
         zero_one_two = torch.arange(3)
         for face_id, face in enumerate(faces):
             faces_edges = [(face[i].item(), face[(i + 1) % 3].item()) for i in range(3)]
@@ -174,22 +174,32 @@ class MeshDS: # : mesh data structures
         self.vs_degree = self.vs_degree.float()
 
     def get_face2points(self, faces) -> T:
+        '''    a'
+              / \\
+             /   \\
+           a.-----.b
+           / \\ /  \\
+        c'/----.----\\ b'
+               c
+        '''
         # len(self) is the amount of face
-        # cords_indices [faces, edge] indicate the face's ith edge corresponding face index
+        # cords_indices [faces, edge] indicate the face's ith vertex corresponding neighbor face index
         cords_indices = torch.zeros(len(self), 3, dtype=torch.int64)
-        # dim(all_inds) is [physical faces index, 3 neighbor faces, vertex index]
+        # dim(all_inds) is [physical faces index, 3 neighbor faces, 3 vertex index]
         all_inds = faces[self.gfmm.t()]
         for i in range(3):
             # [..., None] means unsqueeze at that dimension
             # ma_a, ma_b find the overlapped vertex index between current face index and its 3 neighbor faces
             
-            # Find the face which is adjacent to ith edge
+            # ma Find the face which is adjacent to ith edge
+            # ma_a one of "vertex index" of [physical faces index, 3 neighbor faces, 3 vertex index] be 0
             ma_a = all_inds - faces[:, i][:, None, None]
             ma_b = all_inds - faces[:, (i + 1) % 3][:, None, None]
             ma = (ma_a * ma_b) == 0
             # ma_final indicate the face adjacent to the ith edge
             # * (~ma) is just broadcast the face which meet the condition to the original ma dimension
             ma_final = (ma.sum(2) == 2)[:, :, None] * (~ma)
+            # masking with same shape output flattened 1d array
             cords_indices[:, i] = all_inds[ma_final]
         return cords_indices
 
@@ -278,9 +288,10 @@ def tetrahedron(callback=lambda x: x):
 
 def compute_face_areas(mesh: T_Mesh) -> T_Mesh:
     vs, faces = mesh
-    face_normals = torch.cross(vs[faces[:, 1]] - vs[faces[:, 0]], vs[faces[:, 2]] - vs[faces[:, 1]])
-    face_areas = torch.norm(face_normals, p=2, dim=1)
-    face_normals = face_normals / face_areas[:, None]
+    # vs[:, faces[:, 1]] [batch, face size, 3 xyz]
+    face_normals = torch.cross(vs[:, faces[:, 1]] - vs[:, faces[:, 0]], vs[:, faces[:, 2]] - vs[:, faces[:, 1]], dim=2)
+    face_areas = torch.norm(face_normals, p=2, dim=2)
+    face_normals = face_normals / face_areas[:, :, None]
     face_areas = 0.5 * face_areas
     return face_areas, face_normals
 
