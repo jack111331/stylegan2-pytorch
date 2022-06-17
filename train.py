@@ -443,7 +443,11 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-
+    # CUDA_VISIBLE_DEVICES=1 WORLD_SIZE=2 python ....
+    # --local_rank 0
+    # --local_rank 1
+    # CUDA_VISIBLE_DEVICES=1 python -m torch.distributed.launch --nproc_per_node=1 --nnodes=2 --node_rank=0/1 --master_addr="192.168.1.1" --master_port=1234 train.py
+    # CUDA_VISIBLE_DEVICES=1 python -m torch.distributed.launch --nproc_per_node=1 --nnodes=2 --master_port=51342 --node_rank=0  --master_addr="cml25.csie.ntu.edu.tw" train.py --batch 3 ./lmdb
     n_gpu = int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
     args.distributed = n_gpu > 1
 

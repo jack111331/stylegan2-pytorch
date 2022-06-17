@@ -1,0 +1,10 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Setup envs",
+            "type": "shell",
+            "command":"source envs.sh",
+        }
+    ]
+}

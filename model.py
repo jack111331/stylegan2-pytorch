@@ -398,16 +398,16 @@ class StyledConv(nn.Module):
         self.activate = FusedLeakyReLU(out_channel)
 
     def forward(self, input, style, mesh_topology, noise=None):
-        # input [1, style_dim features, faces]
+        # input [batch, style_dim features, faces]
         # mesh_topology [3, faces]
         batch = input.shape[0]
 
         n_faces = input.shape[-1]
-        # x_a [1, 4 features, 3 neighbor faces, faces]
+        # x_a [batch, 4 features, 3 neighbor faces, faces]
         input_a = input[:, :, mesh_topology]
-        # x_b [1, 4 features, 3 neighbor faces, faces] self feature dup 3 times
+        # x_b [batch, 4 features, 3 neighbor faces, faces] self feature dup 3 times
         input_b = input.view(batch, -1, 1, n_faces).expand_as(input_a)
-        # x [1, 8 features, 3 neighbor faces, faces]
+        # x [batch, 8 features, 3 neighbor faces, faces]
         input = torch.cat((input_a, input_b), 1)
         # reshape so that it meet the Modulated2DVonv
         input = input.reshape(batch, -1, n_faces * 3, 1)
@@ -416,7 +416,7 @@ class StyledConv(nn.Module):
         
         out = out.view(batch, -1, 3, n_faces)
         # Prevent from face order
-        # x [1, 8 or 4 features, faces]
+        # x [batch, 8 or 4 features, faces]
         out = out.max(2)[0]
 
         out = self.noise(out, noise=noise)
@@ -440,11 +440,11 @@ class ToDisplacement(nn.Module):
         n_faces = input.shape[-1]
         batch = input.shape[0]
 
-        # x_a [1, 4 features, 3 neighbor faces, faces]
+        # x_a [batch, 4 features, 3 neighbor faces, faces]
         input_a = input[:, :, mesh_topology]
-        # x_b [1, 4 features, 3 neighbor faces, faces] self feature dup 3 times
+        # x_b [batch, 4 features, 3 neighbor faces, faces] self feature dup 3 times
         input_b = input.view(batch, -1, 1, n_faces).expand_as(input_a)
-        # x [1, 8 features, 3 neighbor faces, faces]
+        # x [batch, 8 features, 3 neighbor faces, faces]
         input = torch.cat((input_a, input_b), 1)
         # reshape so that it meet the Modulated2DVonv
         input = input.reshape(batch, -1, n_faces * 3, 1)
@@ -453,7 +453,7 @@ class ToDisplacement(nn.Module):
 
         out = out.view(batch, -1, 3, n_faces)
         # Prevent from face order
-        # x [1, 3 features(displacement xyz), faces]
+        # x [batch, 3 features(displacement xyz), faces]
         out = out.max(2)[0]
 
 
@@ -522,6 +522,7 @@ class Generator(nn.Module):
             self.channels[4], self.channels[4] // 2, 1, style_dim, blur_kernel=blur_kernel
         )
         self.to_displacement1 = ToDisplacement(self.channels[4], style_dim, upsample=False)
+        self.to_rgb1 = ToDisplacement(self.channels[4], style_dim, upsample=False)
 
         self.log_size = int(math.log(size, 2))
         self.num_layers = (self.log_size - 2) * 2 + 1
@@ -692,9 +693,9 @@ class Generator(nn.Module):
         # FIXME extract initial level mesh's feature(argument)
         batch = latent.shape[0]
         # refresh 
-        self.temp_template_mesh = self.template_mesh.copy(batch).to('cuda')
-        out_mesh_feat = self.temp_template_mesh.extract_features(0.0, False).to('cuda')
-        out_mesh_topology = self.temp_template_mesh.gfmm.to('cuda')
+        temp_template_mesh = self.template_mesh.copy(batch).to('cuda')
+        out_mesh_feat = temp_template_mesh.extract_features(0.0, False).to('cuda')
+        out_mesh_topology = temp_template_mesh.gfmm.to('cuda')
         # gfmm(3, 960)
         # 
         # FIXME should normalize feature first, for modularize, demodularize
@@ -703,11 +704,13 @@ class Generator(nn.Module):
         # out_mesh_feat = self.input(latent, out_mesh_feat)
         out_mesh_feat = self.conv0(out_mesh_feat)
         out_mesh_feat = self.conv1(out_mesh_feat, latent[:, 0], out_mesh_topology, noise=noise[0])
-        skip = self.to_displacement1(out_mesh_feat, latent[:, 1], out_mesh_topology)
-        # skip no problem
-        # (1, 3, 960)
+        # skip [batch, feature, vert]
+        skip_displacement = self.to_displacement1(out_mesh_feat, latent[:, 1], out_mesh_topology)
+
+        skip_vertices_color = self.to_rgb1(out_mesh_feat, latent[:, 1], out_mesh_topology)
+
         # add displacement onto original mesh
-        self.temp_template_mesh = self.temp_template_mesh + skip
+        temp_template_mesh += skip_displacement
 
         # Current assume it won't enter here
         # i = 1
@@ -722,16 +725,14 @@ class Generator(nn.Module):
         #     i += 2
 
         # Differential rendering to make image
-        # FIXME both are returned from template_mesh's raw mesh
-        vertices, faces = self.temp_template_mesh.vs, self.temp_template_mesh.faces 
+        vertices, faces = temp_template_mesh.vs, temp_template_mesh.faces 
 
         # FIXME checkout https://github.com/marcoamonteiro/pi-GAN/blob/896b8994f415b7efc73f97868a9c99f59ac51adb/generators/volumetric_rendering.py#L91
         # for camera sample distribution
         from pytorch3d.structures import Meshes
         from pytorch3d.renderer import TexturesVertex
-        # FIXME checkout verts' dimension and faces dimension, texture argument should be satisfied for synthesize face texture
-        verts_rgb = torch.ones_like(vertices, requires_grad=True).to('cuda') # (batch, V, 3)
-        textures = TexturesVertex(verts_features=verts_rgb)
+        # verts_rgb = torch.ones_like(vertices, requires_grad=True).to('cuda') # (batch, V, 3)
+        textures = TexturesVertex(verts_features=skip_vertices_color.permute(0, 2, 1))
         mesh_output = Meshes(verts=vertices, faces=faces.repeat(batch, 1, 1), textures=textures)  # Meshes(Vertex, Faces, Texture)
         # self.renderer(mesh) (batch, height, width, channels[rgba]), need to convert to (batch, channels, height, width) for later discriminator conv
         rendered_image = self.renderer(mesh_output)

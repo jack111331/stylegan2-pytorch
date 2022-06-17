@@ -134,3 +134,4 @@ wandb/
 
 stylegan2-ffhq-config-f.pt
 lmdb*
+nohup
