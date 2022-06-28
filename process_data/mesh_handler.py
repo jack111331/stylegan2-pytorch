@@ -76,7 +76,7 @@ class MeshHandler:
             self.valid_axes = True
 
     def copy(self, batch=None):
-        mesh = self.vs.clone(), self.faces.clone()
+        mesh = self.vs.clone().detach(), self.faces.clone().detach()
         new_mesh_handler = MeshHandler(mesh, self.opt)
         if batch != None:
             new_mesh_handler.repeat(batch)

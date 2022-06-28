@@ -179,7 +179,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
 
         mask_img = fake_img[:, 3, ...]
         fake_img_color = fake_img[:, :3, ...]
-        fake_img = mask_img[:, None, ...] * fake_img_color
+        fake_img = mask_img[:, None, ...].repeat(1, 3, 1, 1) * fake_img_color
 
         if args.augment:
             real_img_aug, _ = augment(real_img, ada_aug_p)
@@ -233,7 +233,7 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         fake_img = fake_img.permute(0, 3, 1, 2)
         mask_img = fake_img[:, 3, ...]
         fake_img_color = fake_img[:, :3, ...]
-        fake_img = mask_img[:, None, ...] * fake_img_color
+        fake_img = mask_img[:, None, ...].repeat(1, 3, 1, 1) * fake_img_color
 
         if args.augment:
             fake_img, _ = augment(fake_img, ada_aug_p)
@@ -321,10 +321,17 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                     sample = sample.permute(0, 3, 1, 2)
                     mask_img = sample[:, 3, ...]
                     fake_img_color = sample[:, :3, ...]
-                    sample = mask_img[:, None, ...] * fake_img_color
+                    sample = mask_img[:, None, ...].repeat(1, 3, 1, 1) * fake_img_color
                     utils.save_image(
                         sample,
                         f"sample/{str(i).zfill(6)}.png",
+                        nrow=int(args.n_sample ** 0.5),
+                        normalize=True,
+                        range=(-1, 1),
+                    )
+                    utils.save_image(
+                        mask_img[..., None].repeat(1, 1, 1, 3).permute(0, 3, 1, 2),
+                        f"sample/{str(i).zfill(6)}_mask.png",
                         nrow=int(args.n_sample ** 0.5),
                         normalize=True,
                         range=(-1, 1),

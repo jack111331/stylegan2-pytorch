@@ -5,6 +5,7 @@ from torchvision import utils
 from model import Generator
 from tqdm import tqdm
 
+# python generate.py --sample 4 --pics 4 --ckpt ./checkpoint/070000.pt
 
 def generate(args, g_ema, device, mean_latent):
 
@@ -16,14 +17,25 @@ def generate(args, g_ema, device, mean_latent):
             sample, _ = g_ema(
                 [sample_z], truncation=args.truncation, truncation_latent=mean_latent
             )
+            mask_img = sample[..., 3]
+            fake_img_color = sample[..., :3]
+            print(mask_img.shape, fake_img_color.shape)
 
             utils.save_image(
-                sample,
+                fake_img_color.permute(0, 3, 1, 2),
                 f"sample/{str(i).zfill(6)}.png",
                 nrow=1,
                 normalize=True,
                 range=(-1, 1),
             )
+            utils.save_image(
+                mask_img[..., None].repeat(1, 1, 1, 3).permute(0, 3, 1, 2),
+                f"sample/{str(i).zfill(6)}_mask.png",
+                nrow=1,
+                normalize=True,
+                range=(-1, 1),
+            )
+
 
 
 if __name__ == "__main__":
@@ -32,7 +44,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate samples from the generator")
 
     parser.add_argument(
-        "--size", type=int, default=1024, help="output image size of the generator"
+        "--size", type=int, default=4, help="output image size of the generator"
     )
     parser.add_argument(
         "--sample",
@@ -68,8 +80,16 @@ if __name__ == "__main__":
     args.latent = 512
     args.n_mlp = 8
 
+    # FIXME acquire base mesh, fix option acquire
+    from process_data.mesh_handler import MeshHandler
+    from process_data import options
+    # (self, path_or_mesh: Union[str, T_Mesh], opt: Options, level: int, local_axes: Union[N, TS] = None)
+    opt_ = options.Options()
+    opt_.parse_cmdline(parser)
+    template_mesh = MeshHandler(path_or_mesh="data/sphere.obj", opt=opt_)
+
     g_ema = Generator(
-        args.size, args.latent, args.n_mlp, channel_multiplier=args.channel_multiplier
+        args.size, args.latent, args.n_mlp, template_mesh, channel_multiplier=args.channel_multiplier
     ).to(device)
     checkpoint = torch.load(args.ckpt)
 
