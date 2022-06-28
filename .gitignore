@@ -134,3 +134,7 @@ wandb/
 
 stylegan2-ffhq-config-f.pt
 lmdb*
+*.pt
+checkpoint_0/*
+checkpoint/*
+.vscode/launch.json
