@@ -138,3 +138,4 @@ lmdb*
 checkpoint_0/*
 checkpoint/*
 .vscode/launch.json
+nohup

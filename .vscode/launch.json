@@ -4,7 +4,6 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
         {
             "name": "Python: Current File",
             "type": "python",
@@ -12,10 +11,35 @@
             "program": "${workspaceFolder}/train.py",
             "console": "integratedTerminal",
             "justMyCode": false,
-            "args": ["--batch", "2", "./lmdb"],
+            "args": ["--batch", "4", "./lmdb"],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "1"
             }
+        },
+        {
+            "name": "Python: Module",
+            "type": "python",
+            "request": "launch",
+            "module": "torch.distributed.launch",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "preLaunchTask": "Setup envs",
+            "args": ["--nproc_per_node", "1", "--nnodes", "2", "--master_port", "12570", "--master_addr", "140.112.29.180", "train.py",
+                "--batch", "16", "./lmdb"], // 
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"
+            }
+            // ,
+            // "argsExpansion": "none"
         }
-    ]
+
+    ],
+    "compounds": [
+        {
+          "name": "Python: Module compounds",
+          "configurations": ["Python: Module"],
+          "preLaunchTask": "${defaultBuildTask}",
+          "stopAll": true
+        }
+      ]
 }
