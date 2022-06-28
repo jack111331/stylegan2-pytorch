@@ -177,17 +177,16 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         fake_img, _ = generator(noise)
         fake_img = fake_img.permute(0, 3, 1, 2)
 
+        mask_img = fake_img[:, 3, ...]
+        fake_img_color = fake_img[:, :3, ...]
+        fake_img = mask_img[:, None, ...] * fake_img_color
+
         if args.augment:
             real_img_aug, _ = augment(real_img, ada_aug_p)
             fake_img, _ = augment(fake_img, ada_aug_p)
 
         else:
             real_img_aug = real_img
-
-        mask_img = fake_img[:, 3, ...]
-        fake_img_color = fake_img[:, :3, ...]
-        fake_img = mask_img[:, None, ...] * fake_img_color
-
 
         fake_pred = discriminator(fake_img)
         real_pred = discriminator(real_img_aug)
@@ -232,13 +231,13 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
         noise = mixing_noise(args.batch, args.latent, args.mixing, device)
         fake_img, _ = generator(noise)
         fake_img = fake_img.permute(0, 3, 1, 2)
+        mask_img = fake_img[:, 3, ...]
+        fake_img_color = fake_img[:, :3, ...]
+        fake_img = mask_img[:, None, ...] * fake_img_color
 
         if args.augment:
             fake_img, _ = augment(fake_img, ada_aug_p)
 
-        mask_img = fake_img[:, 3, ...]
-        fake_img_color = fake_img[:, :3, ...]
-        fake_img = mask_img[:, None, ...] * fake_img_color
         fake_pred = discriminator(fake_img)
 
         g_loss = g_nonsaturating_loss(fake_pred)
@@ -315,17 +314,21 @@ def train(args, loader, generator, discriminator, g_optim, d_optim, g_ema, devic
                     }
                 )
 
-            # if i % 100 == 0:
-            #     with torch.no_grad():
-            #         g_ema.eval()
-            #         sample, _ = g_ema([sample_z], g_ema)
-            #         utils.save_image(
-            #             sample,
-            #             f"sample/{str(i).zfill(6)}.png",
-            #             nrow=int(args.n_sample ** 0.5),
-            #             normalize=True,
-            #             range=(-1, 1),
-            #         )
+            if i % 100 == 0:
+                with torch.no_grad():
+                    g_ema.eval()
+                    sample, _ = g_ema([sample_z], g_ema)
+                    sample = sample.permute(0, 3, 1, 2)
+                    mask_img = sample[:, 3, ...]
+                    fake_img_color = sample[:, :3, ...]
+                    sample = mask_img[:, None, ...] * fake_img_color
+                    utils.save_image(
+                        sample,
+                        f"sample/{str(i).zfill(6)}.png",
+                        nrow=int(args.n_sample ** 0.5),
+                        normalize=True,
+                        range=(-1, 1),
+                    )
 
             if i % 10000 == 0:
                 torch.save(
@@ -443,7 +446,12 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-
+    # CUDA_VISIBLE_DEVICES=1 WORLD_SIZE=2 python ....
+    # --local_rank 0
+    # --local_rank 1
+    # CUDA_VISIBLE_DEVICES=1 python -m torch.distributed.launch --nproc_per_node=1 --nnodes=2 --node_rank=0/1 --master_addr="192.168.1.1" --master_port=1234 train.py
+    # CUDA_VISIBLE_DEVICES=1 python -m torch.distributed.launch --nproc_per_node=1 --nnodes=2 --master_port=51342 --node_rank=0  --master_addr="cml25.csie.ntu.edu.tw" train.py --batch 3 ./lmdb
+    # CUDA_VISIBLE_DEVICES=1 python -m torch.distributed.launch --nproc_per_node 1 --nnodes 2 --master_port 12570  --master_addr 140.112.29.180 train.py --batch 16 ./lmdb
     n_gpu = int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
     args.distributed = n_gpu > 1
 

@@ -19,7 +19,7 @@ class Upsampler:
          /       \\
         /----b----\\
         '''
-        base_inds = 3 * torch.arange(faces_t.shape[0], device=vs_t.device).unsqueeze(1) + vs_t.shape[0]
+        base_inds = 3 * torch.arange(faces_t.shape[0], device=vs_t.device).unsqueeze(1) + vs_t.shape[1]
 
         # Edge vertices for each face which still have overlapped upsampled vertices 
         raw_edges = torch.cat([faces_t[:, [i, (i + 1) % 3]] for i in range(3)], dim=1).view(-1, 2).sort()[0].cpu()
@@ -47,7 +47,7 @@ class Upsampler:
          / \\m/  \\
         /----.----\\
         '''
-        faces_mid = [(torch.arange(3 * faces_t.shape[0], device=vs_t.device) + vs_t.shape[0]).view(-1, 3)]
+        faces_mid = [(torch.arange(3 * faces_t.shape[0], device=vs_t.device) + vs_t.shape[1]).view(-1, 3)]
 
         # prepare vertex index constructed the other 3 face for upsample face
         # Note that it uses original face vertex index, not mapped to real face index
@@ -63,17 +63,25 @@ class Upsampler:
 
         # For preventing same edge being upsampled twice with its middle vertex being different, it uses the mapping to deal with it
         # The non-upsampled(front) part is mapped to itself, the upsampled(back) part is mapped to non-overlapped one
-        mapper = torch.cat((torch.arange(vs_t.shape[0]), mapper + vs_t.shape[0])).to(device=vs_t.device)
+        mapper = torch.cat((torch.arange(vs_t.shape[1]), mapper + vs_t.shape[1])).to(device=vs_t.device)
         self.down_faces = faces_t
         self.up_faces = mapper[torch.cat(faces_sr + faces_mid, dim=0)]
         self.mask = mask.to(vs_t.device)
-        self.down_len = vs_t.shape[0]
+        self.down_len = vs_t.shape[1]
 
     def __call__(self, mesh: T_Mesh) -> T_Mesh:
+        batch = vs.shape[0]
         vs, faces = mesh
-        mid_points = torch.cat([torch.mean(vs[faces][:, [i, (i + 1) % 3], :], dim=1) for i in range(3)],
-                               dim=1).view(-1, 3)
-        up_vs = torch.cat((vs, mid_points[self.mask.to(vs.device)]), dim=0)
+        # vs[:, faces] [batch, faces, 3vert, 3xyz]
+        # vs[:, faces][:, :, [i, (i + 1) % 3], :] [batch, faces, 2 neightbor vert, 3xyz]
+        # torch.mean(vs[:, faces][:, :, [i, (i + 1) % 3], :], dim=2) [batch, faces, 3xyz]
+        # [torch.mean(vs[:, faces][:, :, [i, (i + 1) % 3], :], dim=2) for i in range(3)]  3edge * [batch, faces, 3xyz]
+        # torch.cat([torch.mean(vs[:, faces][:, :, [i, (i + 1) % 3], :], dim=2) for i in range(3)], dim=2).view(-1, 3) [batch, 3 * faces (face edges), 3xyz]
+        mid_points = torch.cat([torch.mean(vs[:, faces][:, :, [i, (i + 1) % 3], :], dim=2) for i in range(3)],
+                               dim=2).view(batch, -1, 3)
+        # mask[None, ...].repeat(batch, 1) [batch, 3*faces]
+        # mid_points[self.mask[None, ...].repeat(batch, 1)]  [batch, masked count, 3xyz]
+        up_vs = torch.cat((vs, mid_points[self.mask[None, ...].repeat(batch, 1).to(vs.device)]), dim=1)
         return up_vs, self.up_faces
 
     def down_sample(self, mesh: T_Mesh) -> T_Mesh:
